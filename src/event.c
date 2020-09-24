@@ -80,6 +80,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
     int events[XMPP_MAX_CONNS_PER_CTX];
     int revents[XMPP_MAX_CONNS_PER_CTX];
     int nfds;
+    int nfds_active;
     int ret;
     xmpp_send_queue_t *sq, *tsq;
     int towrite;
@@ -169,6 +170,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
 
     /* find events to watch */
     nfds = 0;
+    nfds_active = 0;
     connitem = ctx->connlist;
     while (connitem) {
         if (nfds >= XMPP_MAX_CONNS_PER_CTX) {
@@ -205,6 +207,9 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
             break;
         }
 
+        if (events[nfds] != 0)
+            nfds_active++;
+
         /* Check if there is something in the SSL buffer. */
         if (conn->tls)
             tls_read_bytes += tls_pending(conn->tls);
@@ -214,7 +219,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
     }
 
     /* check for events */
-    if (nfds > 0)
+    if (nfds_active > 0)
         ret = sock_wait(fds, nfds, events, revents, (next < timeout) ? next : timeout);
     else {
         if (timeout > 0)
