@@ -97,9 +97,19 @@ xmpp_conn_t *xmpp_conn_new(xmpp_ctx_t *const ctx)
 {
     xmpp_conn_t *conn = NULL;
     xmpp_connlist_t *tail, *item;
+    int nconn = 0;
 
     if (ctx == NULL)
         return NULL;
+
+    /* Check that maximum number of connections per context is not exceeded */
+    for (item = ctx->connlist; item; item = item->next) {
+        nconn++;
+    }
+    if (nconn >= XMPP_MAX_CONNS_PER_CTX) {
+        xmpp_error(ctx, "xmpp", "Too many connections in context, increase XMPP_MAX_CONNS_PER_CTX");
+        return NULL;
+    }
 
     conn = xmpp_alloc(ctx, sizeof(xmpp_conn_t));
     if (conn != NULL) {

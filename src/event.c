@@ -35,7 +35,6 @@
 #include <string.h>
 
 #ifndef _WIN32
-#include <sys/select.h>
 #include <errno.h>
 #include <unistd.h>
 #define _sleep(x) usleep((x)*1000)
@@ -77,15 +76,15 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
 {
     xmpp_connlist_t *connitem;
     xmpp_conn_t *conn;
-    fd_set rfds, wfds;
-    sock_t max = 0;
+    int fds[XMPP_MAX_CONNS_PER_CTX];
+    int events[XMPP_MAX_CONNS_PER_CTX];
+    int revents[XMPP_MAX_CONNS_PER_CTX];
+    int nfds;
     int ret;
-    struct timeval tv;
     xmpp_send_queue_t *sq, *tsq;
     int towrite;
     char buf[STROPE_MESSAGE_BUFFER_SIZE];
     uint64_t next;
-    uint64_t usec;
     int tls_read_bytes = 0;
 
     if (ctx->loop_status == XMPP_LOOP_QUIT)
@@ -168,16 +167,16 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
        the time when timed handlers need to be called */
     next = handler_fire_timed(ctx);
 
-    usec = ((next < timeout) ? next : timeout) * 1000;
-    tv.tv_sec = (long)(usec / 1000000);
-    tv.tv_usec = (long)(usec % 1000000);
-
-    FD_ZERO(&rfds);
-    FD_ZERO(&wfds);
-
     /* find events to watch */
+    nfds = 0;
     connitem = ctx->connlist;
     while (connitem) {
+        if (nfds >= XMPP_MAX_CONNS_PER_CTX) {
+            xmpp_error(ctx, "xmpp", "Too many connections in context, increase XMPP_MAX_CONNS_PER_CTX");
+            return;
+        }
+        fds[nfds] = conn->sock;
+        events[nfds] = 0;
         conn = connitem->conn;
 
         switch (conn->state) {
@@ -188,7 +187,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
             /* make sure the timeout hasn't expired */
             if (time_elapsed(conn->timeout_stamp, time_stamp()) <=
                 conn->connect_timeout)
-                FD_SET(conn->sock, &wfds);
+                events[nfds] |= SOCK_WRITE;
             else {
                 conn->error = ETIMEDOUT;
                 xmpp_info(ctx, "xmpp", "Connection attempt timed out.");
@@ -196,9 +195,9 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
             }
             break;
         case XMPP_STATE_CONNECTED:
-            FD_SET(conn->sock, &rfds);
+            events[nfds] |= SOCK_READ;
             if (conn->send_queue_len > 0)
-                FD_SET(conn->sock, &wfds);
+                events[nfds] |= SOCK_WRITE;
             break;
         case XMPP_STATE_DISCONNECTED:
             /* do nothing */
@@ -210,22 +209,20 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
         if (conn->tls)
             tls_read_bytes += tls_pending(conn->tls);
 
-        if (conn->state != XMPP_STATE_DISCONNECTED && conn->sock > max)
-            max = conn->sock;
-
         connitem = connitem->next;
+        nfds++;
     }
 
     /* check for events */
-    if (max > 0)
-        ret = select(max + 1, &rfds, &wfds, NULL, &tv);
+    if (nfds > 0)
+        ret = sock_wait(fds, nfds, events, revents, (next < timeout) ? next : timeout);
     else {
         if (timeout > 0)
             _sleep(timeout);
         return;
     }
 
-    /* select errored */
+    /* sock_wait errored */
     if (ret < 0) {
         if (!sock_is_recoverable(sock_error()))
             xmpp_error(ctx, "xmpp", "event watcher internal error %d",
@@ -238,13 +235,13 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
         return;
 
     /* process events */
-    connitem = ctx->connlist;
-    while (connitem) {
+    nfds = 0;
+    for (connitem = ctx->connlist; connitem; connitem = connitem->next) {
         conn = connitem->conn;
 
         switch (conn->state) {
         case XMPP_STATE_CONNECTING:
-            if (FD_ISSET(conn->sock, &wfds)) {
+            if (revents[nfds] & SOCK_WRITE) {
                 /* connection complete */
 
                 /* check for error */
@@ -263,7 +260,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
 
             break;
         case XMPP_STATE_CONNECTED:
-            if (FD_ISSET(conn->sock, &rfds) ||
+            if ((revents[nfds] & SOCK_READ) ||
                 (conn->tls && tls_pending(conn->tls))) {
                 if (conn->tls) {
                     ret = tls_read(conn->tls, buf, STROPE_MESSAGE_BUFFER_SIZE);
@@ -305,7 +302,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
             break;
         }
 
-        connitem = connitem->next;
+        nfds++;
     }
 
     /* fire any ready handlers */

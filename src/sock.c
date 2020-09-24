@@ -31,9 +31,11 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <poll.h>
 #endif
 
 #include "sock.h"
+#include "common.h"
 #include "snprintf.h"
 
 void sock_initialize(void)
@@ -241,4 +243,91 @@ int sock_connect_error(const sock_t sock)
     recv(sock, &temp, 1, 0);
 
     return sock_error();
+}
+
+
+/** Wait for sockets to become readable or writable.
+ *
+ *  @param fds an array of file descriptors (set unused fds to -1)
+ *  @param nfds number of fds in the array
+ *  @param events input array: bitmask per fd consisting of SOCK_READ and/or SOCK_WRITE
+ *  @param events output array: bitmask per fd consisting of SOCK_READ and/or SOCK_WRITE
+ *  @param timeout_ms time to wait for events in milliseconds
+ *
+ *  @return -1 on error (check errno), 0 on timeout, or number of descriptors in ready state otherwise
+ */
+int sock_wait(const int *fds, int nfds, const int *events, int *revents, int timeout_ms) {
+#ifdef _WIN32
+    fd_set rfds, wfds;
+    struct timeval tv;
+    int ret;
+    int max = 0;
+    int i;
+
+    tv.tv_sec = (long)(timeout_ms / 1000);
+    tv.tv_usec = (long)((timeout_ms * 1000) % 1000000);
+
+    FD_ZERO(&rfds);
+    FD_ZERO(&wfds);
+    for (i = 0; i < nfds; i++) {
+        /* Safety check */
+        if (fds[i] >= FD_SETSIZE) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        if (fds[i] != -1 && events[i] != 0) {
+            if (events[i] & SOCK_READ)
+                FD_SET(fds[i], &rfds);
+            if (events[i] & SOCK_WRITE)
+                FD_SET(fds[i], &wfds);
+            if (fds[i] > max)
+                max = fds[i];
+        }
+    }
+
+    ret = select(max + 1, &rfds, &wfds, NULL, &tv);
+    if (ret > 0) {
+        for (i = 0; i < nfds; i++) {
+            revents[i] = 0;
+            if (fds[i] != -1) {
+                if (FD_ISSET(fds[i], &rfds))
+                    revents[i] |= SOCK_READ;
+                if (FD_ISSET(fds[i], &wfds))
+                    revents[i] |= SOCK_WRITE;
+            }
+        }
+    }
+    return ret;
+#else
+    struct pollfd pfds[XMPP_MAX_CONNS_PER_CTX];
+    int ret;
+    int i;
+
+    if (nfds > XMPP_MAX_CONNS_PER_CTX) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for (int i = 0; i < nfds; i++) {
+        pfds[i].fd = fds[i];
+        pfds[i].events = 0;
+        if (events[i] & SOCK_READ)
+            pfds[i].events |= POLLIN;
+        if (events[i] & SOCK_WRITE)
+            pfds[i].events |= POLLOUT;
+    }
+
+    ret = poll(pfds, nfds, timeout_ms);
+    if (ret > 0) {
+        for (i = 0; i < nfds; i++) {
+            revents[i] = 0;
+            if (pfds[i].revents & POLLIN)
+                revents[i] |= SOCK_READ;
+            if (pfds[i].revents & POLLOUT)
+                revents[i] |= SOCK_WRITE;
+        }        
+    }
+    return ret;
+#endif
 }

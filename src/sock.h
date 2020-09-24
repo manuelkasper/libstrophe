@@ -25,6 +25,11 @@ typedef int sock_t;
 typedef SOCKET sock_t;
 #endif
 
+enum {
+    SOCK_READ = 1,
+    SOCK_WRITE = 2
+};
+
 void sock_initialize(void);
 void sock_shutdown(void);
 
@@ -41,5 +46,6 @@ int sock_is_recoverable(const int error);
 /* checks for an error after connect, return 0 if connect successful */
 int sock_connect_error(const sock_t sock);
 int sock_set_keepalive(const sock_t sock, int timeout, int interval);
+int sock_wait(const int *fds, int nfds, const int *events, int *revents, int timeout_ms);
 
 #endif /* __LIBSTROPHE_SOCK_H__ */

@@ -104,6 +104,12 @@ extern "C" {
  */
 #define XMPP_EINT -3
 
+/* limits */
+/** @def XMPP_MAX_CONNS_PER_CTX
+ *  Maximum number of connections per context.
+ */
+#define XMPP_MAX_CONNS_PER_CTX 256
+
 /* initialization and shutdown */
 void xmpp_initialize(void);
 void xmpp_shutdown(void);

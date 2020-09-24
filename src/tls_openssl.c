@@ -16,9 +16,7 @@
 #include <errno.h> /* EINTR */
 #include <string.h>
 
-#ifndef _WIN32
-#include <sys/select.h>
-#else
+#ifdef _WIN32
 #include <winsock2.h>
 #endif
 
@@ -57,8 +55,7 @@ struct _tls {
 
 enum {
     TLS_SHUTDOWN_MAX_RETRIES = 10,
-    TLS_TIMEOUT_SEC = 0,
-    TLS_TIMEOUT_USEC = 100000,
+    TLS_TIMEOUT_MSEC = 100
 };
 
 static void _tls_sock_wait(tls_t *tls, int error);
@@ -427,28 +424,20 @@ int tls_clear_pending_write(tls_t *tls)
 
 static void _tls_sock_wait(tls_t *tls, int error)
 {
-    struct timeval tv;
-    fd_set rfds;
-    fd_set wfds;
-    int nfds;
+    int events;
+    int revents;
     int ret;
 
     if (error == SSL_ERROR_NONE)
         return;
 
-    FD_ZERO(&rfds);
-    FD_ZERO(&wfds);
+    events = 0;
     if (error == SSL_ERROR_WANT_READ)
-        FD_SET(tls->sock, &rfds);
+        events |= SOCK_READ;
     if (error == SSL_ERROR_WANT_WRITE)
-        FD_SET(tls->sock, &wfds);
-    nfds = (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE)
-               ? tls->sock + 1
-               : 0;
+        events |= SOCK_WRITE;
     do {
-        tv.tv_sec = TLS_TIMEOUT_SEC;
-        tv.tv_usec = TLS_TIMEOUT_USEC;
-        ret = select(nfds, &rfds, &wfds, NULL, &tv);
+        ret = sock_wait(&tls->sock, 1, &events, &revents, TLS_TIMEOUT_MSEC);
     } while (ret == -1 && errno == EINTR);
 }
 
