@@ -177,9 +177,9 @@ void xmpp_run_once(xmpp_ctx_t *ctx, const unsigned long timeout)
             xmpp_error(ctx, "xmpp", "Too many connections in context, increase XMPP_MAX_CONNS_PER_CTX");
             return;
         }
+        conn = connitem->conn;
         fds[nfds] = conn->sock;
         events[nfds] = 0;
-        conn = connitem->conn;
 
         switch (conn->state) {
         case XMPP_STATE_CONNECTING:
